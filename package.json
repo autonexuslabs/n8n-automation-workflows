@@ -1,0 +1,10 @@
+{
+  "name": "n8n-automation-workflows",
+  "version": "1.0.0",
+  "description": "Five importable n8n workflows for small-business automation, with the Code-node logic unit-tested outside n8n.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test" }
+}

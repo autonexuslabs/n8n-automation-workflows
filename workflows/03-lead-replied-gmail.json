@@ -1,0 +1,310 @@
+{
+  "name": "03 · Lead replied → star + update sheet + Telegram",
+  "nodes": [
+    {
+      "id": "91ce6658-67d7-459c-a682-547dfdf132f4",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -320
+      ],
+      "parameters": {
+        "content": "## Lead replied → star + update sheet + Telegram\nPolls Gmail every 5 minutes. Bounces and out-of-office replies are ignored. A real reply is matched against the Leads sheet by email; when it is a lead, the thread is starred, the row's status becomes **Replied** (or **Do not contact** for an opt-out) and you get the reply text on Telegram.",
+        "width": 640,
+        "height": 240,
+        "color": 5
+      }
+    },
+    {
+      "id": "3c530612-a4d6-4b44-a63c-11b36b140064",
+      "name": "New inbox mail",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 5,
+              "unit": "minutes"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "in:inbox -from:me -category:promotions -category:social"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail"
+        }
+      }
+    },
+    {
+      "id": "30892133-d1ca-435f-ab69-7f06eace473c",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0f214811-4198-442d-ad4d-29522174829c",
+              "name": "sheetId",
+              "value": "YOUR_GOOGLE_SHEET_ID",
+              "type": "string"
+            },
+            {
+              "id": "ad19bd44-0321-42c6-a479-78673fefacf6",
+              "name": "telegramChatId",
+              "value": "YOUR_TELEGRAM_CHAT_ID",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b6ae67c6-889a-455f-a1be-3af3a95566b6",
+      "name": "Classify reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Keep only real human replies, and flag opt-outs. Order matters:\n// \"I'll stop by\" is not an opt-out, \"no thanks\" is not a yes.\nconst out = []\nfor (const item of $('New inbox mail').all()) {\n  const m = item.json\n  const from = (m.from?.value?.[0]?.address ?? '').toLowerCase()\n  const subject = m.subject ?? ''\n  const auto = m.headers?.['auto-submitted'] ?? ''\n  if (/^(mailer-daemon|postmaster)@/.test(from)) continue\n  if ((auto && !/auto-submitted: no/i.test(auto)) || /out of (the )?office|automatic reply|auto-?reply/i.test(subject)) continue\n  const text = String(m.text ?? '').split(/\\n\\s*(on .{5,120} wrote:|-----\\s*original message)/i)[0].trim()\n  const optOut = /(^|\\n)\\s*(stop|unsubscribe|remove)\\s*[.!]?\\s*($|\\n)|\\b(unsubscribe me|remove me|take me off|stop (emailing|contacting))\\b/i.test(text)\n  out.push({ json: { email: from, subject, text: text.slice(0, 1500), messageId: m.id, threadId: m.threadId, optOut } })\n}\nreturn out"
+      }
+    },
+    {
+      "id": "a3b5a651-c895-40d9-a869-e8e08d733f53",
+      "name": "Find lead by email",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        660,
+        0
+      ],
+      "alwaysOutputData": false,
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Settings').first().json.sheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "email",
+              "lookupValue": "={{ $json.email }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "id": "fa669c3f-4d01-43ad-a021-4dc96b4a35a9",
+      "name": "Merge reply + lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Pair each found lead row with the reply it matched.\nconst replies = $('Classify reply').all().map((i) => i.json)\nreturn $input.all().map((row) => {\n  const r = replies.find((x) => x.email === String(row.json.email ?? '').toLowerCase())\n  return r ? { json: { ...r, name: row.json.name ?? r.email, status: r.optOut ? 'Do not contact' : 'Replied', lastReply: new Date().toISOString().slice(0, 10) } } : null\n}).filter(Boolean)"
+      }
+    },
+    {
+      "id": "1c205dab-aecd-4f6f-ad02-6ee64762f382",
+      "name": "Star thread",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1100,
+        -120
+      ],
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $json.messageId }}",
+        "labelIds": [
+          "STARRED"
+        ]
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail"
+        }
+      }
+    },
+    {
+      "id": "4f634b3e-0477-4aa5-acb9-c617bfac87cf",
+      "name": "Update status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1100,
+        60
+      ],
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Settings').first().json.sheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "email": "={{ $json.email }}",
+            "status": "={{ $json.status }}",
+            "lastReply": "={{ $json.lastReply }}"
+          },
+          "matchingColumns": [
+            "email"
+          ],
+          "schema": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "id": "33863c14-6915-4a0b-a06e-9798ec4f4f2d",
+      "name": "Reply alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        240
+      ],
+      "parameters": {
+        "chatId": "={{ $('Settings').first().json.telegramChatId }}",
+        "text": "=📩 <b>{{ $json.name }}</b> replied{{ $json.optOut ? ' (opt-out, marked Do not contact)' : '' }}\n{{ $json.subject }}\n\n{{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ME",
+          "name": "Telegram bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "New inbox mail": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Classify reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify reply": {
+      "main": [
+        [
+          {
+            "node": "Find lead by email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find lead by email": {
+      "main": [
+        [
+          {
+            "node": "Merge reply + lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge reply + lead": {
+      "main": [
+        [
+          {
+            "node": "Star thread",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Update status",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Reply alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

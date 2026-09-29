@@ -1,0 +1,306 @@
+{
+  "name": "02 · Website lead → CRM sheet + Telegram",
+  "nodes": [
+    {
+      "id": "236300ca-5133-4d86-a359-c7442948ebd3",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -320
+      ],
+      "parameters": {
+        "content": "## Website lead → CRM sheet + Telegram\nA form or chat widget POSTs `{ name, phone, email, message }` to this webhook. The lead is validated and normalised. **Emergencies (gas, CO, smoke, sparks) skip the queue** and page the owner at once; everything else is appended to the Leads tab and announced.\n\nThe webhook answers in both cases, so the website never hangs.",
+        "width": 640,
+        "height": 240,
+        "color": 5
+      }
+    },
+    {
+      "id": "cf6ee3e9-75fb-4fc8-a9ea-66da31fb73c8",
+      "name": "Lead webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "b6b09c9b-1bea-47cf-a2e2-7e5910901a5f",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "530f6658-9802-4eb7-af86-290577f41c3f",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0f214811-4198-442d-ad4d-29522174829c",
+              "name": "sheetId",
+              "value": "YOUR_GOOGLE_SHEET_ID",
+              "type": "string"
+            },
+            {
+              "id": "ad19bd44-0321-42c6-a479-78673fefacf6",
+              "name": "telegramChatId",
+              "value": "YOUR_TELEGRAM_CHAT_ID",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "bf3fcc43-468e-40b4-aa40-a5cff7f9242b",
+      "name": "Validate + normalise",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Clean what the website sent; never trust client input.\nconst b = $('Lead webhook').first().json.body ?? {}\nconst clean = (v, n = 300) => String(v ?? '').trim().slice(0, n)\nconst digits = clean(b.phone).replace(/\\D/g, '').slice(-10)\nconst message = clean(b.message, 2000)\nconst EMERGENCY = /\\b(gas (smell|leak)|smell(s|ing)? (of )?gas|carbon monoxide|co (alarm|detector)|smoke|sparks?|sparking|on fire)\\b/i\nreturn [{ json: {\n  receivedAt: new Date().toISOString(),\n  name: clean(b.name, 120),\n  phone: digits.length === 10 ? '(' + digits.slice(0, 3) + ') ' + digits.slice(3, 6) + '-' + digits.slice(6) : clean(b.phone, 40),\n  email: clean(b.email, 200).toLowerCase(),\n  message,\n  source: clean(b.source || 'website', 40),\n  emergency: EMERGENCY.test(message),\n  valid: Boolean(clean(b.name) && (digits.length === 10 || clean(b.email).includes('@'))),\n  status: 'New',\n} }]"
+      }
+    },
+    {
+      "id": "0f7beb90-e028-4143-aeff-ead225f77563",
+      "name": "Emergency?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "9660ebe9-2fcd-4d06-a113-32ba32fad4fb",
+              "leftValue": "={{ $json.emergency }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "0a8e028f-745e-40b8-acfe-b65c731f6676",
+      "name": "🚨 Page the owner",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        -160
+      ],
+      "parameters": {
+        "chatId": "={{ $('Settings').first().json.telegramChatId }}",
+        "text": "=🚨 <b>POSSIBLE EMERGENCY</b> from the website\n{{ $json.name }} · {{ $json.phone }}\n\n{{ $json.message }}\n\nCall them now.",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ME",
+          "name": "Telegram bot"
+        }
+      }
+    },
+    {
+      "id": "9b0b4fa3-252e-4145-a0ec-9d8a4687e6f6",
+      "name": "Append to Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        120
+      ],
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Settings').first().json.sheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "id": "a4128c6a-dc59-4805-a7ec-586b30bad7e9",
+      "name": "New lead alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        120
+      ],
+      "parameters": {
+        "chatId": "={{ $('Settings').first().json.telegramChatId }}",
+        "text": "=🆕 <b>New lead</b> ({{ $('Validate + normalise').first().json.source }})\n{{ $('Validate + normalise').first().json.name }} · {{ $('Validate + normalise').first().json.phone }}\n\n{{ $('Validate + normalise').first().json.message }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ME",
+          "name": "Telegram bot"
+        }
+      }
+    },
+    {
+      "id": "47afb496-b27a-4f7e-af28-7abc62d3421a",
+      "name": "Reply to website",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": true } }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Lead webhook": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Validate + normalise",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate + normalise": {
+      "main": [
+        [
+          {
+            "node": "Emergency?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Emergency?": {
+      "main": [
+        [
+          {
+            "node": "🚨 Page the owner",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Append to Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append to Leads": {
+      "main": [
+        [
+          {
+            "node": "New lead alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚨 Page the owner": {
+      "main": [
+        [
+          {
+            "node": "Reply to website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New lead alert": {
+      "main": [
+        [
+          {
+            "node": "Reply to website",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

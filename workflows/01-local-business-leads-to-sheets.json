@@ -1,0 +1,305 @@
+{
+  "name": "01 · Local business leads → Google Sheets",
+  "nodes": [
+    {
+      "id": "ccca44f6-ace4-43a1-a243-13e8055fec83",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -300
+      ],
+      "parameters": {
+        "content": "## Local business leads → Google Sheets\nEvery morning: search Google Places (official API) for each query, flatten and dedupe the results, drop closed businesses, then upsert into the **Leads** tab by `placeId` so reruns never duplicate a row.\n\n**Setup:** Settings node (sheet id, chat id, queries) · HTTP Header Auth credential `X-Goog-Api-Key` · Google Sheets + Telegram credentials.",
+        "width": 640,
+        "height": 220,
+        "color": 5
+      }
+    },
+    {
+      "id": "2d0d55bc-884b-49f9-a2a5-a70fc98dd3ad",
+      "name": "Every morning 6am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "1170413c-92c0-4648-a4ea-60b206cabfaa",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0f214811-4198-442d-ad4d-29522174829c",
+              "name": "sheetId",
+              "value": "YOUR_GOOGLE_SHEET_ID",
+              "type": "string"
+            },
+            {
+              "id": "ad19bd44-0321-42c6-a479-78673fefacf6",
+              "name": "telegramChatId",
+              "value": "YOUR_TELEGRAM_CHAT_ID",
+              "type": "string"
+            },
+            {
+              "id": "678266a2-59aa-427a-a826-e15c741a5c04",
+              "name": "queries",
+              "value": "plumber in Springfield, MO\nhvac contractor in Columbia, MO\nroofer in Joplin, MO",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "95be3697-c824-41cf-a2a9-d9721fe8a3fc",
+      "name": "One item per query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Settings.queries holds one search per line; emit one item per search.\nconst lines = $('Settings').first().json.queries.split('\\n').map((s) => s.trim()).filter(Boolean)\nreturn lines.map((query) => ({ json: { query } }))"
+      }
+    },
+    {
+      "id": "3c741865-2113-40ba-a570-f403605a610f",
+      "name": "Places Text Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://places.googleapis.com/v1/places:searchText",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Goog-FieldMask",
+              "value": "places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.businessStatus"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ textQuery: $json.query, pageSize: 20 }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Google Places API key"
+        }
+      }
+    },
+    {
+      "id": "53f15222-c979-4234-aa13-fd701562076c",
+      "name": "Flatten + dedupe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// One API response per query → one row per business, deduped across queries\n// by place id, phone and website domain, closed businesses dropped.\nconst seen = new Set()\nconst rows = []\nconst domain = (u) => { try { return new URL(u).hostname.replace(/^www\\./, '') } catch { return '' } }\n$input.all().forEach((item, i) => {\n  const query = $('One item per query').all()[i]?.json.query ?? ''\n  for (const p of item.json.places ?? []) {\n    if (p.businessStatus && p.businessStatus !== 'OPERATIONAL') continue\n    const phone = (p.nationalPhoneNumber ?? '').replace(/\\D/g, '').slice(-10)\n    const keys = [p.id && 'id:' + p.id, phone && 'p:' + phone, p.websiteUri && 'd:' + domain(p.websiteUri)].filter(Boolean)\n    if (keys.some((k) => seen.has(k))) continue\n    keys.forEach((k) => seen.add(k))\n    rows.push({ json: {\n      placeId: p.id, name: p.displayName?.text ?? '', phone: p.nationalPhoneNumber ?? '', website: p.websiteUri ?? '',\n      address: p.formattedAddress ?? '', rating: p.rating ?? '', reviews: p.userRatingCount ?? '', query,\n      firstSeen: new Date().toISOString().slice(0, 10),\n    } })\n  }\n})\nreturn rows"
+      }
+    },
+    {
+      "id": "72de2afc-e102-495f-a781-bd650e3fe033",
+      "name": "Upsert into Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Settings').first().json.sheetId }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "placeId"
+          ],
+          "schema": []
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_ME",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "id": "1e7a0afc-82cd-4216-aaf3-594f01e100bb",
+      "name": "Count",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return [{ json: { total: $input.all().length } }]"
+      }
+    },
+    {
+      "id": "e82213b5-4de0-4f07-a889-c92e0746a2cd",
+      "name": "Morning summary",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "chatId": "={{ $('Settings').first().json.telegramChatId }}",
+        "text": "=🌅 <b>Lead list refreshed</b>\n{{ $json.total }} businesses upserted into the Leads sheet.",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ME",
+          "name": "Telegram bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every morning 6am": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "One item per query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One item per query": {
+      "main": [
+        [
+          {
+            "node": "Places Text Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Places Text Search": {
+      "main": [
+        [
+          {
+            "node": "Flatten + dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten + dedupe": {
+      "main": [
+        [
+          {
+            "node": "Upsert into Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert into Leads": {
+      "main": [
+        [
+          {
+            "node": "Count",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Count": {
+      "main": [
+        [
+          {
+            "node": "Morning summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

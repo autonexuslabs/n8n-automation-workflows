@@ -1,0 +1,208 @@
+{
+  "name": "05 · Uptime watchdog → Telegram (alerts on change)",
+  "nodes": [
+    {
+      "id": "c5581709-be1d-412c-a6b5-8d241e30e3cd",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -320
+      ],
+      "parameters": {
+        "content": "## Uptime watchdog → Telegram\nEvery 5 minutes, probes each URL. State lives in **workflow static data**, so an outage alerts once when it starts (after 2 failures in a row) and once when it ends, with the downtime. No database, no alert spam.\n\nStatic data persists only for the **active** (production) workflow, not manual test runs.",
+        "width": 640,
+        "height": 240,
+        "color": 5
+      }
+    },
+    {
+      "id": "5d7c447b-6e6f-4a54-a2e8-f7e091cf8fef",
+      "name": "Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "28f3135e-6cfa-4cf3-a472-167fc22ea6fe",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ad19bd44-0321-42c6-a479-78673fefacf6",
+              "name": "telegramChatId",
+              "value": "YOUR_TELEGRAM_CHAT_ID",
+              "type": "string"
+            },
+            {
+              "id": "7fdbb489-7a7a-45cc-af05-06ab2c137c73",
+              "name": "urls",
+              "value": "https://example.com\nhttps://example.org",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d5444335-8b88-42a7-a7ef-d675f527bc95",
+      "name": "One item per URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return $('Settings').first().json.urls.split('\\n').map((s) => s.trim()).filter(Boolean).map((url) => ({ json: { url } }))"
+      }
+    },
+    {
+      "id": "2bcc7be7-ed77-42d7-aabd-301df55ecc8f",
+      "name": "Probe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "deb056f5-d082-4689-af70-6714db2c7fb5",
+      "name": "Decide alerts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Compare with the last run. Down after 2 failures in a row; announce once.\nconst state = $getWorkflowStaticData('global')\nconst now = Date.now()\nconst urls = $('One item per URL').all().map((i) => i.json.url)\nconst alerts = []\n$input.all().forEach((item, i) => {\n  const url = urls[i]\n  const code = item.json.statusCode\n  const ok = code >= 200 && code < 400\n  const s = state[url] ?? { down: false, fails: 0, since: null }\n  if (ok) {\n    if (s.down) alerts.push({ text: '🟢 <b>' + url + '</b> is back up after ' + Math.round((now - s.since) / 60000) + ' min' })\n    state[url] = { down: false, fails: 0, since: null }\n  } else {\n    const fails = s.fails + 1\n    const since = s.since ?? now\n    if (!s.down && fails >= 2) alerts.push({ text: '🔴 <b>' + url + '</b> is DOWN (' + (code ?? item.json.error?.message ?? 'no answer') + ')' })\n    state[url] = { down: s.down || fails >= 2, fails, since }\n  }\n})\nreturn alerts.map((a) => ({ json: a }))"
+      }
+    },
+    {
+      "id": "b01180ab-55a7-4f75-a9e9-c0423418a3dd",
+      "name": "Send alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "chatId": "={{ $('Settings').first().json.telegramChatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ME",
+          "name": "Telegram bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "One item per URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One item per URL": {
+      "main": [
+        [
+          {
+            "node": "Probe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Probe": {
+      "main": [
+        [
+          {
+            "node": "Decide alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide alerts": {
+      "main": [
+        [
+          {
+            "node": "Send alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

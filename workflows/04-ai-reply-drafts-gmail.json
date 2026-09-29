@@ -1,0 +1,393 @@
+{
+  "name": "04 · Customer email → Claude draft → review in Gmail",
+  "nodes": [
+    {
+      "id": "57ec0fc7-b790-48a8-a363-b2fac51bb62a",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -340
+      ],
+      "parameters": {
+        "content": "## Customer email → Claude draft → review in Gmail\nNew mail under the **Inquiries** label gets a reply drafted by Claude from your business facts, saved as a **Gmail draft in the same thread**. Nothing is sent: you open Gmail, edit, press Send.\n\nEmergencies never reach the model. Drafts that mention a price, a guarantee or a time promise are flagged in the Telegram note.",
+        "width": 680,
+        "height": 260,
+        "color": 5
+      }
+    },
+    {
+      "id": "adf9e4ef-5f38-4e57-a1ba-8cd561f6fdbf",
+      "name": "New inquiry",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 5,
+              "unit": "minutes"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "label:inquiries -from:me"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail"
+        }
+      }
+    },
+    {
+      "id": "0ba439ec-72a5-4d2c-a4c5-80c3afa34def",
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ad19bd44-0321-42c6-a479-78673fefacf6",
+              "name": "telegramChatId",
+              "value": "YOUR_TELEGRAM_CHAT_ID",
+              "type": "string"
+            },
+            {
+              "id": "2bb823c5-64fd-4cf3-aeb4-631a032164bb",
+              "name": "model",
+              "value": "claude-sonnet-5-5",
+              "type": "string"
+            },
+            {
+              "id": "29ba682e-3519-4c8c-aeff-60540296265f",
+              "name": "businessFacts",
+              "value": "Northwind Heating & Air. Services: furnace and AC repair and replacement, heat pumps, water heaters. Area: Kansas City, Independence, Liberty. Hours: Mon-Fri 7am-6pm, Sat 8am-2pm, emergency line 24/7 at (816) 555-0101. We never quote prices by email: a technician gives a free written estimate at the home for replacements. Visits are booked in two-hour windows and confirmed by text.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "08497be6-1f22-412f-acf4-6d939a1a2bbd",
+      "name": "Emergency check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const m = $('New inquiry').first().json\nconst text = String(m.text ?? '').slice(0, 4000)\nconst EMERGENCY = /\\b(gas (smell|leak)|smell(s|ing)? (of )?gas|carbon monoxide|co (alarm|detector)|smoke|sparks?|sparking|on fire)\\b/i\nreturn [{ json: {\n  from: m.from?.value?.[0]?.address ?? '', name: m.from?.value?.[0]?.name ?? '', subject: m.subject ?? '',\n  text, threadId: m.threadId, emergency: EMERGENCY.test(m.subject + ' ' + text),\n} }]"
+      }
+    },
+    {
+      "id": "3e2164e7-75e0-41ec-aa17-00aac3746e90",
+      "name": "Emergency?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "9660ebe9-2fcd-4d06-a113-32ba32fad4fb",
+              "leftValue": "={{ $json.emergency }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "aa25c6b3-6084-45da-aee2-ba5c8229a3cc",
+      "name": "🚨 Call them now",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        -180
+      ],
+      "parameters": {
+        "chatId": "={{ $('Settings').first().json.telegramChatId }}",
+        "text": "=🚨 <b>Possible emergency by email</b> from {{ $json.name || $json.from }}\n{{ $json.subject }}\n\n{{ $json.text }}\n\nThe model was not asked. Phone them.",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ME",
+          "name": "Telegram bot"
+        }
+      }
+    },
+    {
+      "id": "e08f4055-e66e-4764-a148-6bba9221572d",
+      "name": "Claude drafts reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: $('Settings').first().json.model,\n  max_tokens: 2000,\n  system: 'You draft email replies for a small home-services business. The owner reviews every draft before sending. Use ONLY these facts: ' + $('Settings').first().json.businessFacts + ' Never quote or hint at a price, never promise an arrival time or guarantee anything, never diagnose. Ask for what is missing to book: address, phone, preferred days. Three to six short sentences. Answer by calling the draft_reply tool.',\n  tools: [{ name: 'draft_reply', description: 'Classify the message and draft the reply.', input_schema: { type: 'object', properties: { intent: { type: 'string', enum: ['quote_request', 'booking', 'question', 'complaint', 'spam', 'other'] }, draft: { type: 'string' }, needs_human: { type: 'boolean' } }, required: ['intent', 'draft', 'needs_human'] } }],\n  tool_choice: { type: 'auto' },\n  messages: [{ role: 'user', content: 'From: ' + $json.from + '\\nSubject: ' + $json.subject + '\\n\\n' + $json.text }]\n}) }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_ME",
+          "name": "Anthropic API key (x-api-key)"
+        }
+      }
+    },
+    {
+      "id": "616750d2-ce22-47a7-a99c-c3c94065f634",
+      "name": "Read draft + scan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        100
+      ],
+      "parameters": {
+        "jsCode": "// Take the tool call, then scan the draft in code: a prompt can be ignored,\n// a regex cannot.\nconst res = $input.first().json\nconst call = (res.content ?? []).find((b) => b.type === 'tool_use')\nif (!call) throw new Error('Claude returned no draft_reply tool call')\nconst d = call.input\nconst ctx = $('Emergency check').first().json\nconst flags = [\n  [/\\$\\s?\\d|\\bper hour\\b/i, 'mentions a price'],\n  [/\\bguarantee/i, 'makes a guarantee'],\n  [/\\b(within|in) (an?|one|two|\\d+) (hours?|minutes?)\\b|\\bsame[- ]day\\b/i, 'promises a time'],\n].filter(([re]) => re.test(d.draft ?? '')).map(([, why]) => why)\nreturn [{ json: { ...ctx, intent: d.intent, draft: d.draft ?? '', needsHuman: d.needs_human || flags.length > 0, flags: flags.join(', ') } }]"
+      }
+    },
+    {
+      "id": "6c2f9413-7494-45d0-a86f-4ae728882b5b",
+      "name": "Has a draft?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "70b783a9-acd6-46f1-ace6-948b1b9d2815",
+              "leftValue": "={{ $json.intent !== 'spam' && $json.draft.length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ec7536b6-1460-4318-a6a9-65e11729826e",
+      "name": "Save Gmail draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        40
+      ],
+      "parameters": {
+        "resource": "draft",
+        "subject": "=Re: {{ $json.subject }}",
+        "message": "={{ $json.draft }}",
+        "options": {
+          "threadId": "={{ $json.threadId }}",
+          "sendTo": "={{ $json.from }}"
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_ME",
+          "name": "Gmail"
+        }
+      }
+    },
+    {
+      "id": "0f936fb8-e054-4a53-ad0f-176aa829e6db",
+      "name": "Draft ready",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1760,
+        40
+      ],
+      "parameters": {
+        "chatId": "={{ $('Settings').first().json.telegramChatId }}",
+        "text": "=✍️ Draft ready in Gmail for <b>{{ $('Read draft + scan').first().json.name || $('Read draft + scan').first().json.from }}</b> ({{ $('Read draft + scan').first().json.intent }}){{ $('Read draft + scan').first().json.needsHuman ? '\\n⚑ Needs you: ' + ($('Read draft + scan').first().json.flags || 'model asked for a human') : '' }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ME",
+          "name": "Telegram bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "New inquiry": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Emergency check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Emergency check": {
+      "main": [
+        [
+          {
+            "node": "Emergency?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Emergency?": {
+      "main": [
+        [
+          {
+            "node": "🚨 Call them now",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Claude drafts reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude drafts reply": {
+      "main": [
+        [
+          {
+            "node": "Read draft + scan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read draft + scan": {
+      "main": [
+        [
+          {
+            "node": "Has a draft?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has a draft?": {
+      "main": [
+        [
+          {
+            "node": "Save Gmail draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Gmail draft": {
+      "main": [
+        [
+          {
+            "node": "Draft ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
